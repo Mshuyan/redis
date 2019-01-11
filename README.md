@@ -130,6 +130,8 @@
 
 ### 启动方式
 
+#### 服务端启动
+
 + 简单启动
 
   直接使用`redis-server`启动
@@ -151,6 +153,20 @@
     ```
 
   > **redis启动参数及配置文件中的相对路径均是相对于执行启动命令的位置，所以使用相对路径时，需要到指定的目录下执行启动命令** 
+
+#### 客户端启动
+
++ 以默认ip`localhost`默认端口`6379`启动
+
+  ```shell
+  $ redis-cli
+  ```
+
++ 指定ip和端口启动
+
+  ```shell
+  $ redis-cli -h 127.0.0.1 -p 6380
+  ```
 
 ### 配置
 
@@ -419,7 +435,13 @@
 
   语法：hset key field value
 
-  功能：设置key中的field属性对应的value
+  功能：无论key或field是否存在，都设置key中的field属性对应的value
+
++ hsetnx
+
+  语法：hsetnx key field value
+
+  功能：只有key或field不存在时，才设置key中的field属性对应的value
 
 + hget
 
@@ -463,7 +485,296 @@
 
   功能：批量设置key中的属性
 
++ hgetall
 
+  语法：hgetall key
+
+  功能：获取key对应的所有的key和value
+
++ hvals
+
+  语法：hvals key
+
+  功能：获取key对应的所有value
+
++ hkeys
+
+  语法：hkeys key
+
+  功能：获取key对应的所有的field
+
++ hincrby
+
+  语法：hincrby key field n
+
+  功能：key中的field属性自增n
+
++ hincrbyfloat
+
+  语法：hincrbyfloat key field f
+
+  功能：key中的field属性自增浮点数f
+
+#### list类型命令
+
++ rpush
+
+  语法：rpush key v1 v2 ...
+
+  功能：从列表右侧依次添加多个元素
+
+  例：
+
+  ```shell
+  127.0.0.1:6380> rpush list2 a b c
+  (integer) 3
+  127.0.0.1:6380> lrange list2 0 -1
+  1) "a"
+  2) "b"
+  3) "c"
+  ```
+
++ lpush
+
+  语法：lpush key v1 v2 ...
+
+  功能：从列表左侧依次添加多个元素
+
+  例：
+
+  ```shell
+  127.0.0.1:6380> lpush list1 a b c
+  (integer) 3
+  127.0.0.1:6380> lrange list1 0 -1
+  1) "c"
+  2) "b"
+  3) "a"
+  ```
+
++ linsert
+
+  语法：linsert key before/after value newValue
+
+  功能：	在名为key的list集合的指定值value前/后插入新值newValue；
+
+  ​		如果存在多个相同的value，则以从左至右第1个为准；
+
+  ​		如果key或value不存在，则插入失败
+
+  例
+
+  ```shell
+  127.0.0.1:6380> lrange list1 0 -1
+  1) "a"
+  2) "b"
+  3) "c"
+  4) "c"
+  127.0.0.1:6380> linsert list1 after c d
+  (integer) 5
+  127.0.0.1:6380> lrange list1 0 -1
+  1) "a"
+  2) "b"
+  3) "c"
+  4) "d"
+  5) "c"
+  ```
+
++ lpop
+
+  语法：lpop key
+
+  功能：从左边弹出(删除并返回)1个元素
+
+  例
+
+  ```shell
+  127.0.0.1:6380> lrange list1 0 -1
+  1) "a"
+  2) "b"
+  3) "c"
+  4) "d"
+  5) "c"
+  127.0.0.1:6380> lpop list1
+  "a"
+  127.0.0.1:6380> lrange list1 0 -1
+  1) "b"
+  2) "c"
+  3) "d"
+  4) "c"
+  ```
+
++ blpop
+
+  语法：blpop key1 key2 ... timeout
+
+  功能：	lpop的阻塞版本
+
+  ​		当key1、key2等集合中有不是空集合的集合时，立即返回该集合中的元素
+
+  ​		   当key1、key2等均是空集合时，等待timeout秒，超时返回`nil`
+
+  ​		等待过程中，当key1、key2等集合中任一集合有新元素时，立即返回该集合中的元素
+
+  ​		当timeout=0时，表示一直阻塞
+
+  例：
+
+  ```shell
+  127.0.0.1:6380> blpop list2 list3 10
+  (nil)
+  (10.07s)
+  127.0.0.1:6380> blpop list2 list3 20
+  1) "list2"
+  2) "a"
+  (12.90s)
+  ```
+
+  说明：当有新元素返回时，返回的第1个元素为集合名称，第2个元素才是真正要返回的元素
+
++ rpop
+
+  语法：rpop key
+
+  功能：从右边弹出(删除并返回)1个元素
+
+  例
+
+  ```shell
+  127.0.0.1:6380> lrange list1 0 -1
+  1) "b"
+  2) "c"
+  3) "d"
+  4) "c"
+  127.0.0.1:6380> rpop list1
+  "c"
+  127.0.0.1:6380> lrange list1 0 -1
+  1) "b"
+  2) "c"
+  3) "d"
+  ```
+
++ brpop
+
+  跟`blpop`一个道理
+
++ lrem
+
+  语法：lrem key count value
+
+  功能：	在名为key的list集合中删除值为value的元素
+
+  ​		count>0时，从左到右，最多删除count个
+
+  ​		count<0时，从右至左，最多删除count个
+
+  ​		count=0时，删除全部
+
+  例：
+
+  ```shell
+  127.0.0.1:6380> lrange list1 0 -1
+  1) "a"
+  2) "b"
+  3) "c"
+  4) "a"
+  5) "b"
+  6) "c"
+  127.0.0.1:6380> lrem list1 2 a
+  (integer) 2
+  127.0.0.1:6380> lrange list1 0 -1
+  1) "b"
+  2) "c"
+  3) "b"
+  4) "c"
+  ```
+
++ ltrim
+
+  语法：ltrim list1 start end
+
+  功能：截取指定范围内的元素
+
+  例：
+
+  ```shell
+  127.0.0.1:6380> lrange list2 0 -1
+  1) "a"
+  2) "b"
+  3) "c"
+  4) "d"
+  5) "e"
+  127.0.0.1:6380> ltrim list2 1 3
+  OK
+  127.0.0.1:6380> lrange list2 0 -1
+  1) "b"
+  2) "c"
+  3) "d"
+  ```
+
++ lrange
+
+  语法：lrange key start end
+
+  功能：	获取指定范围内元素
+
+  ​		结果包含下标为start和end的元素
+
+  ​		  start代表的元素必须在end代表元素的左侧，否则报`list为空`
+
+  例：
+
+  ```shell
+  127.0.0.1:6380> lrange list1 0 -1
+  1) "a"
+  2) "b"
+  3) "c"
+  4) "d"
+  5) "e"
+  127.0.0.1:6380> lrange list1 1 2
+  1) "b"
+  2) "c"
+  127.0.0.1:6380> lrange list1 1 0
+  (empty list or set)
+  ```
+
++ lindex
+
+  语法：lindex key index
+
+  功能：获取key集合中下标为index的元素
+
++ llen
+
+  语法：llen key
+
+  功能：获取list集合长度
+
++ lset
+
+  语法：lset key index newValue
+
+  功能：设置key集合中下标为index的值为newValue
+
+  例：
+
+  ```shell
+  127.0.0.1:6380> lrange list1 0 -1
+  1) "a"
+  2) "b"
+  3) "c"
+  4) "d"
+  5) "e"
+  127.0.0.1:6380> lset list1 0 f
+  OK
+  127.0.0.1:6380> lrange list1 0 -1
+  1) "f"
+  2) "b"
+  3) "c"
+  4) "d"
+  5) "e"
+  ```
+
+#### set类型命令
 
 + sadd
 
@@ -490,11 +801,54 @@
 
 + smembers
 
-  查看set集合的值
+  语法：smembers key
+
+  功能：查看set集合的值
+
++ sinter
+
+  语法：sinter key1 key2 ...
+
+  功能：获取多个集合中的交集元素
+
++ sdiff
+
+  语法：sdiff key1 key2 ...
+
+  功能：获取key1集合中有，其他集合中没有的元素
+
+  例：
 
   ```shell
-  smembers key
+  127.0.0.1:6380> smembers set1
+  1) "a"
+  2) "c"
+  3) "b"
+  127.0.0.1:6380> smembers set2
+  1) "e"
+  2) "c"
+  3) "d"
+  127.0.0.1:6380> sdiff set1 set2
+  1) "a"
+  2) "b"
+  127.0.0.1:6380> sdiff set2 set1
+  1) "e"
+  2) "d"
   ```
+
++ sunion
+
+  语法：sunion key1 key2 ...
+
+  功能：获取key1、key2等集合的并集
+
++ srem
+
+  语法：srem key value
+
+  功能：删除集合中某元素
+
++ 
 
 ### 数据结构与内部编码
 
@@ -523,3 +877,19 @@
   <img src="assets/image-20190109165718308-7024238.png" width="400px" /> 
 
   hash类型的结构相对于字符串多了1个属性`field`，该结构类似于`javabean`对象，key相当于对象，field相当于对象中属性，value相当于属性值
+
+#### list
+
++ `key:list`结构
+
++ list集合中的元素分别有正负2个下标
+
+  长度为n的list，第1个元素的下标为0，同时也是-n；最后1个元素下标为n-1，同时也是-1
+
+  ![image-20190111171551754](assets/image-20190111171551754-7198151.png) 
+
+#### set
+
++ Redis的Set是string类型的无序集合。集合成员是唯一的，这就意味着集合中不能出现重复的数据。
+
++ Redis 中 集合是通过哈希表实现的，所以添加，删除，查找的复杂度都是O(1)。
