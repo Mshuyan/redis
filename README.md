@@ -212,6 +212,70 @@
 
 ## API理解与使用
 
+### 数据结构与内部编码
+
+<img src="assets/image-20190109160314122-7020994.png" width="400px" /> 
+
+### 类型
+
+#### 字符串
+
+- 可以保存哪些值
+  - 字符串
+  - 数字
+  - 二进制
+  - json、xml等字符串
+- 使用场景
+  - 缓存
+  - 计数器
+  - 分布式锁
+  - ...
+- 相关命令参见[字符串类型命令](#字符串类型命令) 
+
+#### hash
+
+- 键值结构
+
+  <img src="assets/image-20190109165718308-7024238.png" width="400px" /> 
+
+  hash类型的结构相对于字符串多了1个属性`field`，该结构类似于`javabean`对象，key相当于对象，field相当于对象中属性，value相当于属性值
+
+#### list
+
+- `key:list`结构
+
+- list集合中的元素分别有正负2个下标
+
+  长度为n的list，第1个元素的下标为0，同时也是-n；最后1个元素下标为n-1，同时也是-1
+
+  ![image-20190111171551754](assets/image-20190111171551754-7198151.png) 
+
+#### set
+
+- Redis的Set是string类型的无序集合。集合成员是唯一的，这就意味着集合中不能出现重复的数据。
+
+- Redis 中 集合是通过哈希表实现的，所以添加，删除，查找的复杂度都是O(1)。
+
+#### zset
+
++ 有序集合由3部分构成
+
+  key：{{element，score}，{element，score}，... }
+
+  + key：与其他类型中的key相同
+  + element：元素
+  + score：分值，一般是数字类型，有序集合中的元素会按照分值进行排序（升序）
+
+  例：
+
++ 集合VS有序集合
+
+  + 都没有重复元素
+  + 集合无序，有序集合按score的值进行排序
+  + 有序集合时间复杂度普遍比集合高
+
++ 与[list](#list)一样，zset根据排序后的顺序，也有正负2个下标
+
 ### 命令
 
 #### 通用命令
@@ -848,48 +912,389 @@
 
   功能：删除集合中某元素
 
-+ 
++ scard
 
-### 数据结构与内部编码
+  语法：scard key
 
-<img src="assets/image-20190109160314122-7020994.png" width="400px" /> 
+  功能：计算集合大小
 
-### 类型
++ sismember
 
-#### 字符串
+  语法：sismember key value
 
-+ 可以保存哪些值
-  + 字符串
-  + 数字
-  + 二进制
-  + json、xml等字符串
-+ 使用场景
-  + 缓存
-  + 计数器
-  + 分布式锁
-  + ...
-+ 相关命令参见[字符串类型命令](#字符串类型命令) 
+  功能：判断集合key中是否存在元素value
 
-#### hash
++ srandmember
 
-+ 键值结构
+  语法：srandmember key [count]
 
-  <img src="assets/image-20190109165718308-7024238.png" width="400px" /> 
+  ​	count为可选参数，默认1
 
-  hash类型的结构相对于字符串多了1个属性`field`，该结构类似于`javabean`对象，key相当于对象，field相当于对象中属性，value相当于属性值
+  功能：随机从集合key中取出count个元素（只取不删）
 
-#### list
++ spop
 
-+ `key:list`结构
+  语法：spop key 
 
-+ list集合中的元素分别有正负2个下标
+  功能：从集合key中随机弹出1个元素（取出并删除）
 
-  长度为n的list，第1个元素的下标为0，同时也是-n；最后1个元素下标为n-1，同时也是-1
+#### zset类型命令
 
-  ![image-20190111171551754](assets/image-20190111171551754-7198151.png) 
++ zadd
 
-#### set
+  语法：zadd key score1 element1 score2 element2 ...
 
-+ Redis的Set是string类型的无序集合。集合成员是唯一的，这就意味着集合中不能出现重复的数据。
+  功能：向集合key中创建并添加元素
 
-+ Redis 中 集合是通过哈希表实现的，所以添加，删除，查找的复杂度都是O(1)。
+  例：
+
+  ```shell
+  127.0.0.1:6380> zadd zset1 1 math 2 english
+  (integer) 2
+  127.0.0.1:6380> zrange zset1 0 -1 withscores
+  1) "math"
+  2) "1"
+  3) "english"
+  4) "2"
+  ```
+
++ zrem
+
+  语法：zrem key element1 element2 ...
+
+  功能：删除key中的某几个元素
+
+  例：
+
+  ```shell
+  127.0.0.1:6380> zrange zset1 0 -1 withscores
+  1) "math"
+  2) "1"
+  3) "english"
+  4) "2"
+  127.0.0.1:6380> zrem zset1 math
+  (integer) 1
+  127.0.0.1:6380> zrange zset1 0 -1 withscores
+  1) "english"
+  2) "2"
+  ```
+
++ zscore
+
+  语法：zscore key element
+
+  功能：获取key中element的分值
+
+  例：
+
+  ```shell
+  127.0.0.1:6380> zscore zset1 english
+  "2"
+  ```
+
++ zincrby
+
+  语法：zincrby key n element
+
+  功能：将key中的element自增n
+
+  例：
+
+  ```shell
+  127.0.0.1:6380> zrange zset1 0 -1 withscores
+  1) "english"
+  2) "2"
+  127.0.0.1:6380> zincrby zset1 1 english
+  "3"
+  ```
+
++ zcard
+
+  语法：zcard key
+
+  功能：获取key中元素总个数
+
++ zrank
+
+  语法：zrank key element
+
+  功能：获取key中元素element按升序排序的排名
+
+  例：
+
+  ```shell
+  127.0.0.1:6380> zrank zset1 english
+  (integer) 0
+  ```
+
++ zrange
+
+  语法：zrange key start end [withscores]
+
+  功能：按范围获取排序后第start到第end的元素，`withscores`为可选参数，表示是否打印分数
+
+  例：
+
+  ```shell
+  127.0.0.1:6380> zrange zset1 0 -1 withscores
+  1) "english"
+  2) "3"
+  127.0.0.1:6380> zrange zset1 0 -1
+  1) "english"
+  ```
+
++ zrangebyscore
+
+  语法：`zrangebyscore key min max [withscores] [limit offset count]`
+
+  功能：返回指定分数范围内的升序元素[分数]
+
+  参数：
+
+  ​	  min、max：表示最小最大分数，默认使用闭区间，前面加上`(`来表示开区间
+
+  ​	limit：同mysql的limit，对返回结果进行分页，从下表为offset的元素开始取count个元素作为最终结果
+
+  例：
+
+  ```shell
+  127.0.0.1:6380> zrange zset1 0 -1 withscores
+  1) "math"
+  2) "2"
+  3) "english"
+  4) "3"
+  5) "yw"
+  6) "4"
+  127.0.0.1:6380> zrangebyscore zset1 (2 (5 withscores limit 1 1
+  1) "yw"
+  2) "4"
+  ```
+
++ zcount
+
+  语法：zcount key min max
+
+  功能：获取指定分数范围内的元素个数
+
+  参数：min、max：表示最小最大分数，默认使用闭区间，前面加上`(`来表示开区间
+
+  例：
+
+  ```shell
+  127.0.0.1:6380> zcount zset1 (2 5
+  (integer) 2
+  ```
+
++ zremrangebyrank
+
+  语法：zremrangebyrank key start end
+
+  功能：删除指定排名范围内的升序元素
+
+  例：
+
+  ```shell
+  127.0.0.1:6380> zrange zset1 0 -1 withscores
+  1) "math"
+  2) "2"
+  3) "english"
+  4) "3"
+  5) "yw"
+  6) "4"
+  127.0.0.1:6380> zremrangebyrank zset1 1 2
+  (integer) 2
+  127.0.0.1:6380> zrange zset1 0 -1 withscores
+  1) "math"
+  2) "2"
+  ```
+
++ zremrangebyscore
+
+  语法：zremrangebyscore key min max
+
+  功能：删除指定分数范围内的升序元素
+
+  例：
+
+  ```shell
+  127.0.0.1:6380> zrange zset1 0 -1 withscores
+   1) "math"
+   2) "2"
+   3) "yw"
+   4) "3"
+   5) "english"
+   6) "4"
+   7) "ty"
+   8) "5"
+   9) "ms"
+  10) "6"
+  127.0.0.1:6380> zremrangebyscore zset1 (3 (6
+  (integer) 2
+  127.0.0.1:6380> zrange zset1 0 -1 withscores
+  1) "math"
+  2) "2"
+  3) "yw"
+  4) "3"
+  5) "ms"
+  6) "6"
+  ```
+
++ zrevrank
+
+  语法：zrevrank key element
+
+  功能：相对于`zrank`，获取某元素在集合中按降序排序的排名
+
+  ```shell
+  127.0.0.1:6380> zrange zset1 0 -1 withscores
+  1) "math"
+  2) "2"
+  3) "yw"
+  4) "3"
+  5) "ms"
+  6) "6"
+  127.0.0.1:6380> zrank zset1 math
+  (integer) 0
+  127.0.0.1:6380> zrevrank zset1 math
+  (integer) 2
+  ```
+
++ zrevrange
+
+  语法：zrevrange key start end with [withscores]
+
+  功能：相对于`zrange`，按降序排序并获取指定排名范围内的元素
+
+  例：
+
+  ```shell
+  127.0.0.1:6380> zrange zset1 0 -1 withscores
+  1) "math"
+  2) "2"
+  3) "yw"
+  4) "3"
+  5) "ms"
+  6) "6"
+  127.0.0.1:6380> zrevrange zset1 0 -1 withscores
+  1) "ms"
+  2) "6"
+  3) "yw"
+  4) "3"
+  5) "math"
+  6) "2"
+  ```
+
++ zrevrangebyscore
+
+  语法：`zrevrangebyscore key max min [withscores] [limit offset count]`
+
+  功能：相对于`zrangebyscore`，按降序排序并获取指定分数范围内的元素
+
+  参数：
+
+  ​	 max、min：表示最大最小分数，默认使用闭区间，前面加上`(`来表示开区间
+
+  ​		**注意：zrangebyscore中是min在前，zrevrangebyscore中是max在前**
+
+  ​	limit：同mysql的limit，对返回结果进行分页，从下表为offset的元素开始取count个元素作为最终结果
+
+  例：
+
+  ```shell
+  127.0.0.1:6380> zrange zset1 0 -1 withscores
+  1) "math"
+  2) "2"
+  3) "yw"
+  4) "3"
+  5) "ms"
+  6) "6"
+  127.0.0.1:6380> zrevrangebyscore zset1 6 (2 withscores limit 1 1
+  1) "yw"
+  2) "3"
+  ```
+
++ zinterstore
+
+  语法：`ZINTERSTORE destination numkeys key [key ...][WEIGHTS weight [weight ...]] [AGGREGATE SUM|MIN|MAX]`
+
+  功能：获取多个集合的**交集**；redis会将乘以权重后的元素按照`aggregate`指定的聚合方式，**将所有集合中都存在的元素进行聚合**，并将得到结果并存储到`destination`集合中
+
+  参数：
+
+  + destination：聚合后的结果存储在该集合中，该集合不存在则创建，存在则更新
+  + numkeys：后面需要进行聚合的集合`key`的数量，该值必须与后面集合数量一致
+  + weights：指定权重，权重参数`weight`的数量必须与`numkeys`的值一致，并且权重参数的顺序就是前面集合`key`的权重的顺序；不指定该参数时默认为1；集合中的每个元素会与其对应的权重相乘后再进行聚合运算
+  + aggregate：选择聚合方式，可选值为：sum：求和；min：取最小值；max：取最大值
+
+  例：
+
+  ```shell
+  127.0.0.1:6380> zrange zset1 0 -1 withscores
+  1) "math"
+  2) "2"
+  3) "yw"
+  4) "3"
+  5) "ms"
+  6) "6"
+  127.0.0.1:6380> zinterstore zset2 2 zset1 zset1 weights 0.5 0.5 aggregate min
+  (integer) 3
+  127.0.0.1:6380> zrange zset2 0 -1 withscores
+  1) "math"
+  2) "1"
+  3) "yw"
+  4) "1.5"
+  5) "ms"
+  6) "3"
+  ```
+
++ zunionstore
+
+  语法：`ZUNIONSTORE destination numkeys key [key ...][WEIGHTS weight [weight ...]] [AGGREGATE SUM|MIN|MAX]`
+
+  功能：获取多个集合的并集；redis会将乘以权重后的元素按照`aggregate`指定的聚合方式，**将所有集合中的所有元素进行聚合**，并将得到结果并存储到`destination`集合中
+
+  参数：参见`zinterstore`
+
+  例：
+
+  ```shell
+  127.0.0.1:6380> zadd z1 1 a 2 b 3 c
+  (integer) 3
+  127.0.0.1:6380> zadd z2 3 b 4 c 5 d
+  (integer) 3
+  127.0.0.1:6380> zunionstore z4 2 z1 z2 weights 0.5 0.5 aggregate min
+  (integer) 4
+  127.0.0.1:6380> zrange z4 0 -1 withscores
+  1) "a"
+  2) "0.5"
+  3) "b"
+  4) "1"
+  5) "c"
+  6) "1.5"
+  7) "d"
+  8) "2.5"
+  ```
+
+## jedis
+
+### 简介
+
+jedis是基于java开发的redis客户端，用户通过java使用redis
+
+### 使用
+
++ 依赖
+
+  ```xml
+  <dependency>
+      <groupId>redis.clients</groupId>
+      <artifactId>jedis</artifactId>
+      <version>3.0.1</version>
+  </dependency>
+  ```
+
+
+
+
+
+
