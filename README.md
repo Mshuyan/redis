@@ -152,7 +152,7 @@
     redis-server config/6380.conf
     ```
 
-  > **redis启动参数及配置文件中的相对路径均是相对于执行启动命令的位置，所以使用相对路径时，需要到指定的目录下执行启动命令** 
+  > **redis启动参数及配置文件中的相对路径均是相对于执行启动命令的位置，所以使用相对路径时，需要到指定的目录下执行启动命令，最好尽量避免使用相对路径** 
 
 #### 客户端启动
 
@@ -194,7 +194,7 @@
 
 + dir
 
-  工作目录
+  工作目录，一般使用绝对路径
 
 + logfile
 
@@ -209,6 +209,29 @@
   + 执行启动命令后，服务将自动后台运行
 
   + 启动日志将打印到日志文件
+
+#### 配置项总结
+
+> 实际开发中，可以将redis默认配置文件`redis.conf`拷贝，并按如下内容对需要修改的配置进行修改后使用
+
+```shell
+port 6380												# redis服务端口
+daemonize yes											# 是否以守护进行启动
+pidfile /var/run/redis_${port}.pid						# pid文件名
+logfile ${port}.log										# 日志文件名
+# save 900 1											# 关闭RDB自动持久化
+# save 300 10
+# save 60 10000
+dbfilename dump_${port}.rdb								# RDB文件名
+dir /Users/will/tools/redis-5.0.3/data					# 日志文件路径
+appendonly yes											# 启用AOF功能
+appendfilename appendonly_${port}.aof					# AOF文件名
+no-appendfsync-on-rewrite yes							# AOF文件重写时停止向AOF文件中写入
+slowlog-log-slower-than 1000
+slowlog-max-len 1000
+```
+
+> 注意将`${port}`替换为实际端口号
 
 ### 可视化客户端
 
@@ -1336,6 +1359,22 @@
 
   功能：查看KEY的类型
 
++ debug reload
+
+  功能：调试模式重启，重启过程中会自动生成RDB文件，但是不会丢失内存中数据
+
++ shutdown
+
+  功能：停止服务，会生成RDB文件
+
++ info memory
+
+  功能：查看redis内存使用情况
+
++ exit
+
+  功能：退出redis客户端
+
 ## java使用redis
 
 ### jedis
@@ -2103,6 +2142,235 @@ public List<Object> executePipelined(RedisCallback<?> action, @Nullable RedisSer
   语法：`georadiusbymember KEY MEMBER RADIUS UNIT [withcoord] [withdist] [withhash] [count COUNT] [asc/desc] [store KEY1] [storedist KEY2]`
 
   功能：与`georadius`一样，只不过将指定的经纬度换成了指定的`member`
+
+## 持久化
+
+redis持久化有2种方式：RDB、AOF
+
+### RDB
+
+#### 介绍
+
++ 以快照的形式持久化
+
++ 当以某种方式触发了redis的RDB持久化时，redis会将内存中所有数据保存到RDB文件中，以后可以使用该文件进行数据恢复
+
++ RDB文件位置为redis配置参数中`dir`指定的路径
+
+  对于`save`、`bgsave`，每次进行持久化时新文件会替代老文件
+
+  对于
+
+#### 触发方式
+
++ 同步
+
+  使用`save`命令实时同步进行备份，命令执行期间其他命令会被阻塞
+
+  例：
+
+  ```shell
+  127.0.0.1:6380> save
+  OK
+  ```
+
++ 异步
+
+  使用`bgsave`命令异步进行后台备份，控制台立即返回`ok`，后台单独开启线程进行备份
+
+  例：
+
+  ```shell
+  127.0.0.1:6380> bgsave
+  Background saving started
+  ```
+
++ 自动
+
+  + 我们可以在redis配置文件中配置自动触发方式的触发条件，相关配置如下：
+
+    ```shell
+    # 以下条件满足其一即触发自动备份
+    save 900 1			# 满足每900秒有1次更改
+    save 300 10			# 满足每300秒有10次更改
+    save 60 10000		# 满足每60秒有10000次更改
+    ```
+
+  + 当满足自动备份触发条件时，redis会自动执行`bgsave`命令启动后台备份
+
+  + 其他相关配置
+
+    ```shell
+    dbfilename dump.rdb					# 备份文件名
+    dir ./								# 备份、日志等文件存储路径
+    stop-writes-on-bgsave-error yes 	# 发生错误时停止备份
+    rdbcompression yes					# 备份时是否压缩
+    rdbchecksum yes						# 是否使用校验和
+    ```
+
++ 对比
+
+  + save对比bgsave
+
+    |   命令   |       save       |       bgsave       |
+    | :------: | :--------------: | :----------------: |
+    |  IO类型  |       同步       |        异步        |
+    | 是否阻塞 |        是        |     fork时阻塞     |
+    |  复杂度  |       O(n)       |        O(n)        |
+    |   优点   | 不会消耗额外内存 | 不会阻塞客户端命令 |
+    |   缺点   |  阻塞客户端命令  | 需要fork，消耗内存 |
+
+  + 自动触发
+
+    自动触发策略的缺点是，无法控制备份频率，所以一般在线上不会使用自动备份
+
++ 其他触发方式
+
+  + 全量复制
+
+  + debug reload
+
+    调试模式重启，不丢失内存中数据
+
+  + shutdown
+
+#### 最佳配置
+
+```shell
+# 关闭自动备份
+# save 900 1			
+# save 300 10			
+# save 60 10000
+dbfilename dump-${port}.rdb					# 备份文件名，使用端口号进行区分
+dir /usr/local/redis/data/					# 备份、日志等文件存储路径，使用绝对路径
+stop-writes-on-bgsave-error yes 			# 发生错误时停止备份
+rdbcompression yes							# 备份时是否压缩
+rdbchecksum yes								# 是否使用校验和
+```
+
+### AOF
+
+#### 介绍
+
++ RDB现存问题
+
+  + 耗时耗性能
+
+    每次备份全部数据，fork时消耗很多内存
+
+  + 不可控、丢失数据
+
+    一次`save`后突然宕机，没来得及做第二次备份，则会丢失数据
+
++ AOF原理
+
+  + 创建
+
+    当每次对redis进行更改时，在日志文件中记录一次操作
+
+  + 恢复
+
+    当redis重启时，将AOF文件重新载入到redis中
+
+#### 三种策略
+
+AOF持久化时，数据从内存中持久化到AOF文件中经历了如下过程：
+
++ 执行每条命令时，将命令写到缓冲区
++ 将缓冲区数据写到AOF文件中
+
+![image-20190121175142111](assets/image-20190121175142111-8064302.png) 
+
+这里的`三种策略`指的就是将缓存中数据何时写到AOF文件中的三种策略
+
++ always
+
+  每次将命令写入到缓存中时都直接将其写入到AOF文件
+
+  + 优点：不会丢失任何数据
+  + 缺点：频繁的IO影响性能
+
++ everysec
+
+  每秒执行1次将缓存中数据写入到AOF文件
+
+  该值为默认值
+
+  + 优点：适当的降低了对IO的读写次数，提升性能
+  + 缺点：发生故障时会丢失1秒数据
+
++ no
+
+  何时将缓存中数据写入到AOF文件由操作系统决定，redis不进行干涉
+
+#### AOF重写
+
++ 什么是AOF重写
+
+  将AOF文件中命令进行整理，只保持最终结果一致
+
+  如：
+
+  ```shell
+  set hello world
+  set hello abc
+  set hello hehe
+  rpush list1 a
+  rpush list1 b
+  rpush list1 c
+  
+  # 整理后如下
+  set hello hehe
+  rpush list1 a b c
+  ```
+
+  **注意：实际进行AOF重写时，是将内存中数据写入到AOF文件，而不会真正的去翻日志文件并进行整理**
+
++ 作用
+
+  + 减少AOF文件大小
+  + 加快恢复速度
+
++ 实现方式
+
+  + 手动重写
+
+    使用`bgrewriteaof`命令手动对AOF文件进行异步重写
+
+    例：
+
+    ```shell
+    127.0.0.1:6380> bgrewriteaof
+    Background append only file rewriting started
+    ```
+
+  + 自动重写
+
+    在redis配置文件中配置自动重写，相关配置如下：
+
+    ```shell
+    # aof重写需要的最小文件尺寸，当文件达到这个尺寸时进行第一次重写
+    auto-aof-rewrite-min-size 64mb
+    # aof文件增长率，文件大小相对于上次重写时的文件大小增长了100%时再次进行重写
+    auto-aof-rewrite-percentage 100
+    ```
+
+#### 最佳配置
+
+```shell
+appendonly yes							# 使用aof就将该项设置为yes
+appendfilename "appenonly-${port}.aof"	# aof文件名
+appendfsync everysec					# 每秒执行一次缓存到AOF文件的写入
+no-appendfsync-on-rewrite yes			# aof重写时停止缓存向aof文件中写入
+auto-aof-rewrite-min-size 64mb			# aof重写最小尺寸
+auto-aof-rewrite-percentage 100			# aof文件增长率
+aof-load-truncated yes					# 加载aof文件时如果发现aof文件不完整是否忽略错误
+```
+
+
+
+
+
 
 
 
