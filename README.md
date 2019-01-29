@@ -1,5 +1,7 @@
 # redis
 
+> + redis学习主要参考资料为[Redis入门视频教程_Redis学习视频教程](http://www.chilangedu.com/course/680324291.html#0) 
+
 ## 初识
 
 ### redis是什么
@@ -188,6 +190,8 @@
   使用`config NAME VALUE`修改配置，如`config daemonize yes`
 
 #### 配置项
+
+> 所有配置项解释参见[Redis 3.2安装及主从复制详细配置](https://segmentfault.com/a/1190000006619753)，由于版本问题部分配置可能不同
 
 + port
 
@@ -1360,6 +1364,10 @@ slowlog-max-len 1000
 
   功能：查看KEY的类型
 
++ flushall
+
+  功能：清除所有数据
+
 + debug reload
 
   功能：调试模式重启，重启过程中会自动生成RDB文件，但是不会丢失内存中数据
@@ -1694,7 +1702,7 @@ redisTemplate.opsForHyperLogLog();//操作HyperLogLog
 
 ##### execute与executePipelined
 
-> 资料参见[RedisTemplate：执行与executePipelined](https://yq.aliyun.com/articles/648282) 
+> 资料参见[RedisTemplate：execute与executePipelined](https://yq.aliyun.com/articles/648282) 
 
 ## redis其他功能
 
@@ -2484,7 +2492,7 @@ AOF持久化时，数据从内存中持久化到AOF文件中经历了如下过�
 + 执行每条命令时，将命令写到缓冲区
 + 将缓冲区数据写到AOF文件中
 
-![image-20190121175142111](assets/image-20190121175142111-8064302.png) 
+<img src="assets/image-20190121175142111-8064302.png" width="400px"/> 
 
 这里的`三种策略`指的就是将缓存中数据何时写到AOF文件中的三种策略
 
@@ -2659,7 +2667,474 @@ aof-load-truncated yes					# 加载aof文件时如果发现aof文件不完整是
 
 + 降低fork频率
 
-+ 
+## 主从复制
+
+### 实现
+
+#### 命令
+
++ 将本机作为指定服务器的从节点
+
+  语法：slaveof IP PORT
+
+  功能：将本机作为指定redis服务端的从节点，该操作会清除本机的所有数据并同步主节点的数据
+
+  例：
+
+  ```shell
+  127.0.0.1:6381> slaveof 127.0.0.1 6380
+  OK
+  ```
+
++ 取消作为其他服务器的从节点
+
+  语法：slaveof no one
+
+  功能：断开与主节点的主从关系
+
+  ```shell
+  127.0.0.1:6381> slaveof no one
+  OK
+  ```
+
+#### 配置
+
+配置方式实现主从复制需要区分版本
+
++ 5.0之前版本使用配置为
+
+  ```shell
+  slaveof ip port							# 作为指定服务器的从节点
+  slave-read-only yes						# 本节点只读，防止修改本节点数据造成主从节点数据不一致
+  ```
+
++ 5.0以后版本使用配置为
+
+  ```shell
+  replicaof ip port							# 作为指定服务器的从节点
+  replica-read-only yes						# 本节点只读，防止修改本节点数据造成主从节点数据不一致
+  ```
+
+### 概念
+
++ run id
+
+  每个redis服务器都有1个`run id`，redis服务器重启后会更新`run id`
+
+  通过如下命令查看
+
+  ```shell
+  127.0.0.1:6380> info server
+  # Server
+  redis_version:5.0.3
+  redis_git_sha1:00000000
+  redis_git_dirty:0
+  redis_build_id:a564c1f0b077b2d3
+  redis_mode:standalone
+  os:Darwin 18.2.0 x86_64
+  arch_bits:64
+  multiplexing_api:kqueue
+  atomicvar_api:atomic-builtin
+  gcc_version:4.2.1
+  process_id:99692
+  run_id:88923f517a96c7e07f90f034823d45c88c96d594			# run id
+  tcp_port:6380
+  uptime_in_seconds:26583
+  uptime_in_days:0
+  hz:10
+  configured_hz:10
+  lru_clock:4667242
+  executable:/Users/will/tools/redis-5.0.3/config/redis-server
+  config_file:/Users/will/tools/redis-5.0.3/config/6380.conf
+  ```
+
++ 偏移量
+
+  偏移量标识了本节点中有多少数据，当主从节点偏移量相等时，则表示主从节点数据是一致的
+
+  可以通过如下命令查看主从节点的偏移量
+
+  ```shell
+  127.0.0.1:6380> info replication
+  # Replication
+  role:master
+  connected_slaves:1
+  slave0:ip=127.0.0.1,port=6381,state=online,offset=492,lag=1		# 从节点信息
+  master_replid:6b7a983aecc6bbf06a0a33cca6b30f36b4160dcb
+  master_replid2:0000000000000000000000000000000000000000
+  master_repl_offset:492			# 主节点偏移量
+  second_repl_offset:-1
+  repl_backlog_active:1
+  repl_backlog_size:1048576
+  repl_backlog_first_byte_offset:1
+  repl_backlog_histlen:492
+  ```
+
+### 全量复制
+
+#### 流程
+
+全量复制流程如下：
+
+<img src="assets/image-20190123152253456-8228174.png" width="400px"/>  
+
+1. 丛节点向主节点发送`psync ? -1`命令，用于向主节点请求同步全量数据
+
+   + psync
+
+     语法：psync RUN_ID OFFSET
+
+     功能：向主节点发送主节点的RUN_ID，并告诉主节点自己的偏移量，用于请求从主节点同步该偏移量以后的数据
+
+     参数：
+
+     + RUN_ID：主节点的`run id`，用于让主节点验证该命令是不是要发给自己的
+     + OFFSET：从节点的偏移量，也是从节点要从哪开始同步数据
+
+2. 主节点向从节点返回`run id`和`offset`等信息
+
+3. 丛节点存储主节点返回的信息
+
+4. 主节点执行`bgsave`生成RDB文件，同时将执行`bgsave`过程中执行的`redis`命令存储在`repl_back_buffer`中
+
+   + repl_back_buffer
+
+     这是1个先进先出的队列，专门用与无法向从节点同步命令时缓存主节点执行的命令，默认大小为1Mb
+
+5. RDB文件生成完成后，将RDB文件发送给从节点
+
+6. 将`repl_back_buffer`中缓存的命令发送给从节点
+
+7. 从节点清除老数据
+
+8. 从节点将RDB文件和`repl_back_buffer`中的数据进行加载
+
+### 部分复制
+
+​	如果主从节点突然断开连接，主节点的数据没办法同步给从节点，当连接恢复后，如果重新进行全量复制，将增加很大开销，此时为了节省开销，可以进行部分复制
+
+​	**当主从节点连接断开且恢复后，如果主节点堆积的数据没有超出`repl_back_buffer`缓冲区时，会采用部分复制**
+
+#### 流程
+
+<img src="assets/image-20190123163518362-8232518.png" width="400px"/>   
+
+1. 主从节点断开连接
+2. 主节点正常执行命令，执行的命令先缓存在缓冲区`repl_back_buffer`中
+3. 恢复连接
+4. 从节点向主节点发送`psync RUN_ID OFFSET`命令，请求偏移量OFFSET之后的数据
+5. 主节点检查该偏移量是否在`repl_back_buffer`队列中
+   + 如果不在，证明已经堆积了太多的数据，没办法进行部分复制，只能重新进行全量复制了
+   + 如果在，证明堆积量还不是很大，可以通过部分复制进行数据同步，此时则会返回`continue`
+6. 主节点将`repl_back_buffer`中的堆积数据同步给从节点
+
+### 全量复制、部分复制使用时机
+
++ 刚连接主从关系时
+
+  全量复制
+
++ 处于连接状态
+
+  主节点主动实时向从节点同步数据
+
++ 连接断开后恢复
+
+  + 从节点偏移量在主节点`repl_back_buffer`内
+
+    部分复制
+
+  + 从节点偏移量不在主节点`repl_back_buffer`内
+
+    全量复制
+
+### 避免全量复制
+
++ 增加`repl_back_buffer`大小
+
+  修改配置参数`repl_backlog_size`
+
+## 高可用（sentinel）
+
+### 故障转移
+
+1个1主2从读写分离的模型如下图：
+
+<img src="assets/image-20190123180633655-8237994.png" width="500px"/> 
+
+ 当主节点挂掉时，为了保证系统运行，应该选择个从节点晋升为主节点，将其他从节点变为他的从节点，将原来主节点剔除
+
+<img src="assets/image-20190123181737042-8238657.png" width="500px"/> 
+
+### 介绍
+
+<img src="assets/image-20190125135813042-8395893.png" width="500px"/> 
+
++ 先看左边的3个redis节点和3个sentinel节点
+
+  + 每个sentinel节点监控1个redis节点，因为同一组中的每个redis节点知道同组中其他redis节点的信息，所以每个sentinel节点能够获得监控同一组中redis节点的其他sentinel节点的信息
+  + 每个sentinel节点监控的并不只是指定的redis节点，而是通过指定的redis节点监控该组主从的所有redis节点
+  + sentinel自动实现故障转移过程
+    1. 多个sentinel发现并确认当前master出现问题
+    2. 选举出1个sentinel作为领导
+    3. 选举出1个slave作为master
+    4. 通知其他slave作为新master的slave
+    5. 通知客户端主从变化
+    6. 老的master如果复活了，则作为新master的从节点
+
++ 观察整个图
+
+  每个sentinel节点可以同时监控多个不同组的redis节点（`monitor`不同）
+
+### 配置启动
+
+> sentinel的配置文件时单独的配置文件`sentinel.conf`
+
+#### 配置项
+
++ port
+
+  sentinel节点占用的端口，默认26379
+
++ dir
+
+  sentinel工作目录，主要用于保存日志文件
+
++ daemonize
+
+  是否以守护进程方式启动，默认no，建议使用yes
+
+  以守护进程启动时：
+
+  - 执行启动命令后，服务将自动后台运行
+  - 启动日志将打印到日志文件
+
++ logfile
+
+  日志文件名
+
++ sentinel monitor
+
+  语法：sentinel monitor NAME IP PORT SLAVE_NUM
+
+  功能：配置要监控的redis节点
+
+  参数：
+
+  + NAME：该组主从redis节点的名称，各个sentinel节点通过该名称确定哪些sentinel节点是一伙的
+  + IP、PORT：要监控的redis节点的IP端口
+  + SLAVE_NUM：多少个sentinel节点认为该redis节点有问题时，开始进行故障转移
+
+  ```shell
+  sentinel monitor master1 127.0.0.1 6380 2
+  ```
+
++ sentinel down-after-milliseconds
+
+  语法：sentinel down-after-milliseconds NAME MS
+
+  功能：sentinel对`monitor`为NAME的redis节点ping了MS毫秒后，redis节点没有反应，说明该节点出问题了；默认值30000
+
+  ```shell
+  sentinel down-after-milliseconds master1 30000
+  ```
+
++ sentinel parallel-syncs
+
+  语法：sentinel parallel-syncs NAME N
+
+  功能：确定新master后，新master需要将数据复制给其他slave，该值设置如果我是新master节点，最多可以同时向多少个slave节点进行复制，默认1
+
+  ```shell
+  sentinel parallel-syncs master1 1
+  ```
+
++ sentinel failover-timeout
+
+  语法：sentinel failover-timeout NAME MS
+
+  功能：设置故障转移总共超时时间，默认3分钟
+
+  ```shell
+  sentinel failover-timeout master1 180000
+  ```
+
+#### 配置总结
+
+```shell
+port 26380
+daemonize yes
+pidfile /var/run/redis-sentinel-26380.pid
+logfile "26380.log"
+dir /Users/will/tools/redis-5.0.3/data
+sentinel monitor mymaster 127.0.0.1 6380 2
+```
+
+#### 启动sentinel
+
+使用`redis-sentinel 配置文件`启动sentinel
+
+```shell
+$ redis-sentinel /Users/will/tools/redis-5.0.3/config/sentinel-26380.conf 
+```
+
+sentinel启动后，sentinel会自动对配置文件进行一些调整
+
+### java高可用客户端
+
+#### 介绍
+
+前面我们只是实现了服务端的高可用，但是如果服务端的master节点发生了变化，客户端是不知道的，所以还需要在客户端实现高可用，这样才能当服务端master节点发生变化时，客户端也能对应的进行切换
+
+#### 原理
+
+客户端的高可用的实现，不再直接连接redis-server，而是连接redis-sentinel
+
++ 将所有的sentinel节点告诉客户端
++ 客户端选择1个sentinel节点获取master节点信息进行连接
++ 当服务端master节点发生变化时，服务端会以发布订阅的方式向客户端推送1条消息，将新的master节点信息告诉客户端
+
+#### springboot实现
+
+基于[springboot使用redis](#springboot使用redis)对配置文件进行修改即可
+
+```properties
+# 使用sentinel时不必配置如下两项
+# 	spring.redis.host=127.0.0.1
+# 	spring.redis.port=6380
+# sentinel配置文件中的monitor
+spring.redis.sentinel.master=mymaster
+# 所有sentinel节点的集合
+spring.redis.sentinel.nodes=127.0.0.1:26380,127.0.0.1:26381,127.0.0.1:26382
+```
+
+其他配置及使用与前面完全相同
+
+### 原理
+
+#### 三个定时器
+
+sentinel内部存在3个定时器
+
++ 每10秒每个sentinel对master和slave执行info
+
+  + 可以发现slave节点
+  + 确认主从关系
+
++ 每2秒，sentinel节点会通过master节点的channel以发布订阅的方式交换信息
+
+  master节点中有1个名为`__sentinel__:hello`的发布订阅的频道，每隔2秒每个sentinel节点就会向该频道中发布一些信息，这些信息包括自身信息和对其他节点的看法，其他sentinel节点就会收到这些信息
+
++ 每秒每个sentinel对其他sentinel和redis执行ping
+
+#### 主观下线与客观下线
+
++ 主观下线
+
+  当某个sentinel节点对某个redis节点ping时，如果超过了`down-after-milliseconds`毫秒，该redis节点没有回复，则该sentinel节点认为该redis节点已经下线，但是他不知道其他sentinel节点怎么认为的，这就是主观下线
+
++ 客观下线
+
+  每个sentinel节点发现某个redis节点下线时，就会告诉其他sentinel节点，当认为该redis节点下线的sentinel节点个数达到`sentinel monitor`的第4个参数指定的值时，则认为该节点确实下线了，这就是客观下线
+
+#### 领导者选举
+
++ 领导者选举是选出1个领导者来指挥下面的故障转移
+
++ 原因
+
+  下面的选举master、故障转移等工作需要由1个sentinel决定，不能大家一起决定，所以需要选出1个领导者
+
++ 选举过程
+
+  + 每个主观认为该redis节点下线的sentinel节点，向其他sentinel节点发送`sentinel is-master-down-by-addr`命令，希望其他sentinel节点选举自己为领导者
+  + 收到命令的sentinel节点如果没有同意过该命令，则同意，否则拒绝
+  + 如果该sentinel节点发现自己的票数已经超过了sentinel节点半数，且超过了`sentinel monitor`的第4个参数指定的值，则他会成为领导者
+  + 如果多个sentinel节点成为了领导者，则等一会再选举1次
+
+#### 领导者指挥故障转移
+
+1. 领导者从slave节点中选出1个作为master节点
+
+   选取规则（按顺序进行选择）：
+
+   + 选择优先级最高的slave节点
+
+     在`redis配置文件`中配置`replica-priority`
+
+   + 选择偏移量最大的节点（数据最完整）
+
+   + 选择`runId`最小的节点
+
+2. 领导者对该slave节点执行`slave of no one`让他成为新的master
+
+3. 向其他slave节点发送命令，让他们成为新master节点的slave节点，并开始进行数据复制，复制参数与配置项`sentinel parallel-syncs`有关
+
+4. 将旧master节点配置为slave节点，并对其保持关注，当他恢复后去复制新的master节点的数据
+
+### 常见问题
+
+#### 节点运维
+
++ 节点下线
+  + master节点
+
+    连接到任意sentinel节点，执行如下命令
+
+    ```shell
+    127.0.0.1:26380> sentinel failover mymaster		# mymaster是sentinel配置文件中配置的monitor
+    OK
+    ```
+
+    此时原来的master节点就变为新master节点的slave节点了
+
+    然后再按照slave节点下线方式对旧master节点进行下线
+
+  + sentinel节点
+
+    直接kill即可
+
+  + slave节点
+
+    直接kill即可
+
+    注意整理日志、RDB、AOF等文件
+
+    注意读写分离问题
+
++ 节点上线
+
+  + master节点
+
+    先作为master节点的从节点，然后调大该节点的优先级，然后执行`sentinel failover`
+
+  + slave节点
+
+    `slaveof`即可
+
+  + sentinel节点
+
+    直接上线
+
+## 集群（Cluster）
+
+### 简介
+
++ 为什么使用集群
+
+  + 提升并发量
+
+    当业务并发量特别大，需要50万/秒的ops时，单机无法达到
+
+  + 提升容量
+
+    redis数据保存在内存中，但是单机内存不会太大
+
+
+
+
+
+
 
 
 
