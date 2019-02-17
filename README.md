@@ -1316,7 +1316,7 @@ slowlog-max-len 1000
 
   语法：keys PATTERN
 
-  功能：查看所有符合条件的key
+  功能：查看当前节点中，所有符合条件的key
 
   参数：PATTERN：使用`*`作为匹配符，如匹配`c`开头的key，则`keys c*`
 
@@ -1698,7 +1698,7 @@ redisTemplate.opsForHyperLogLog();//操作HyperLogLog
 
 ##### 通用api
 
-+ 
+更多`RedisTemplate`的api参见[如何使用RedisTemplate访问Redis数据结构](https://www.jianshu.com/p/7bf5dc61ca06/) 
 
 ##### execute与executePipelined
 
@@ -3130,6 +3130,931 @@ sentinel内部存在3个定时器
 
     redis数据保存在内存中，但是单机内存不会太大
 
+### 分区
+
+#### 顺序分区
+
+将数据按顺序分成n份，并分别分配到n个节点上
+
+如：数据1-100，一共有3个节点，则第1个节点存1-33，第2个存34-66，第3个存67-100
+
+#### 哈希分区
+
+将key取hash值后，按照一定得规则（如取模）对数据进行分区
+
+##### 节点取余分区
+
++ 分区规则：hash(key)%nodes，得到的结果就是需要放在第几个分区
+
++ 缺点：增加节点时数据迁移量特别大；节点数翻倍扩容时数据迁移量最小，为50%
+
+##### 一致性哈希分区
+
++ 分区规则
+
+  <img src="assets/image-20190129131510627-8738911.png" width="300px"/> 
+
+  ​	将key取hash值，该hash值是有范围的（如1-100），所以可以将hash(key)看做1个环，然后将这个环平均分为n份，n为节点数，这里以节点数为4为例；那么节点n1负责hash(key)为1-25的数据，节点n2负责hash(key)为26-50的数据，以此类推
+
+  ​	当需要增加节点时，只需要将1个节点上的部分数据进行迁移即可；如：在n1和n2之间增加n5，那么只需要将n2的部分数据迁移到n5即可
+
++ 缺点
+
+  + 只影响相邻接点，还是有数据迁移
+  + 当所有节点数据都快满时，还是需要翻倍扩容，数据迁移量仍为50%
+
+##### 虚拟哈希分区
+
+虚拟哈希分区又叫虚拟槽分区，参见[虚拟槽分区](#虚拟槽分区) 
+
+#### 顺序分区VS哈希分区
+
+| 分布方式 |                             特点                             |                          典型产品                          |
+| :------: | :----------------------------------------------------------: | :--------------------------------------------------------: |
+| 哈希分布 | 数据分散度高<br />键值分布与业务无关<br />无法顺序访问<br />支持批量操作 | 一致性哈希MemoryCache<br />Redis Cluster<br />其他缓存产品 |
+| 顺序分布 | 数据分散度易倾斜<br />键值业务相关<br />可以顺序访问<br />不支持批量操作 |                    BigTable<br />HBase                     |
+
+### 虚拟槽分区
+
+#### 优缺点
+
+> 参见：
+>
+> + [redis分区](https://blog.csdn.net/lengyuezuixue/article/details/79076012) 
+> + [redis集群高可用](https://www.cnblogs.com/leeSmall/p/8414687.html) 
+
+- 优点
+
+  - 通过利用多太计算机内存的和值，允许我们构造更大的数据库。
+  - 通过多核和多台计算机，允许我们扩展计算能力；通过多台计算机和网络适配器，允许我们扩展网络宽带。
+  - 解耦数据与节点关系
+
+- 缺点
+
+  - 键的批量操作支持有限，比如：
+
+    mset, mget，如果多个键映射在不同的实例，就不支持了
+
+    当两个key映射到不同的redis实例上时，你就不能对这两个set执行交集操作
+
+  - 键事务支持有限，当多个key分布在不同节点时无法使用事务，同一节点是支持事务
+
+  - 不支持多数据库，只有0，select 0
+
+  - 复制结构只支持单层结构，不支持树型结构。
+
+#### 概念介绍
+
+- 高可用
+
+  redis cluster的高可用不需要sentinel实现，不需要配置sentinel节点，他自己就具备主从复制的特性。
+
+- 槽
+
+  redis集群中有1个长度为16384的槽的概念，集群中的每个master节点负责一部分的槽
+
+  至于哪个master节点负责哪部分槽，可以用户指定，也可以在初始化时自动生成（redis-trib.rb脚本）
+
+- 位序列结构
+
+  每个master节点维护着如下两样东西：
+
+  + 一个16384/8字节的位序列
+
+    用于标记哪个槽是由自己负责的
+
+  + 长度为16384的数组
+
+    数组中记录内容为节点编号，用来维护槽与节点的映射关系
+
+- 键值分布基本算法
+
+  该算法为`crc16(key) & 0x3FFF`，用来计算某个key属于哪个槽
+
+- 键哈希标签
+
+  如果用户希望将某些key存储在相同的槽中，需要使用`键哈希标签`，使用方法为，将key设置为如下格式字符串：
+
+  ```
+  abc{table}def
+  ```
+
+  其中，`{}`内的字符串为这批key的标签，同一批key的标签是相同的
+
+  redis在计算槽时，只会使用`{}`内的字符串计算槽，因为同一批key的标签相同，所有计算出的槽就是相同的
+
+
+#### 安装
+
+##### 原生安装
+
++ 配置redis节点
+
+  cluster节点的`redis.config`配置文件在[redis节点基本配置](#配置项总结)基础上增加如下配置
+
+  ```shell
+  # 以下配置在原配置文件中均被注释掉了，注意放开注释
+  cluster-enabled yes							# 启用集群功能
+  cluster-config-file nodes-${port}.conf		# 指定该节点的集群配置文件名
+  											# 该文件是由redis在dir指定的目录下自动生成的
+  cluster-node-timeout 15000					# 保持默认配置即可
+  cluster-require-full-coverage no			# 是否集群中所有节点都可用才对外提供服务
+  ```
+
++ 启动节点
+
+  启动节点与[服务端启动](#服务端启动)方法相同
+
++ meet
+
+  启动后各个节点之间无法进行通信，需要通过meet操作使各个节点能够相互通信
+
+  在当前cluster节点执行如下命令
+
+  ```
+  cluster meet ip port
+  ```
+
+  如：
+
+  ```shell
+  WilldeMacBook-Air:config will$ redis-cli -p 7000
+  127.0.0.1:7000> cluster meet 127.0.0.1 7001
+  OK
+  127.0.0.1:7000> cluster meet 127.0.0.1 7002
+  OK
+  127.0.0.1:7000> cluster meet 127.0.0.1 7003
+  OK
+  127.0.0.1:7000> cluster meet 127.0.0.1 7004
+  OK
+  127.0.0.1:7000> cluster meet 127.0.0.1 7005
+  OK
+  ```
+
+  此时，这6个节点就可以互相进行通信了
+
++ 分配槽
+
+  此时各个节点并不能存储数据，因为还没有分配槽，分配槽命令分为如下几种方式：
+
+  + 登录后单独分配
+
+    ```shell
+    WilldeMacBook-Air:data will$ redis-cli -p 7000
+    127.0.0.1:7000> cluster addslots 0 1
+    OK
+    ```
+
+  + 登录前单独分配
+
+    ```shell
+    WilldeMacBook-Air:data will$ redis-cli -p 7001 cluster addslots 5462 5463
+    OK
+    ```
+
+  + 登录前按范围分配
+
+    ```shell
+    WilldeMacBook-Air:data will$ redis-cli -p 7000 cluster addslots {2..5461}
+    OK
+    ```
+
+  注意：已经分配过得槽不可以重复分配，提示如下，会导致此次分配的所有槽都分配失败
+
+  ```shell
+  WilldeMacBook-Air:data will$ redis-cli -p 7001 cluster addslots {5462..10922}
+  (error) ERR Slot 5462 is already busy
+  ```
+
++ 设置主从
+
+  将某节点设置为灵位一个节点的从节点，需要在从节点上执行如下命令：
+
+  ```shell
+  cluster replicate node-id
+  ```
+
+  这里的`node-id`不同于`run-id`，不会因为重启而改变，`node-id`可以通过`cluster nodes`命令查看，或在`dir`指定的目录下，查看`node.config`文件
+
+  ```shell
+  127.0.0.1:7003> cluster nodes
+  # node-id                                ip        port 
+  b271712652d9023300639be3b0e7df4afd4c80d7 127.0.0.1:7005@17005 master - 0 1550043050000 0 connected
+  85bf9151af545735b0ef873c7db443d10a6c6163 127.0.0.1:7002@17002 master - 0 1550043048000 2 connected 10923-16383
+  6ee71a839737f4cf21ae06ad6d7e2fac633ad084 127.0.0.1:7000@17000 master - 0 1550043050553 1 connected 0-5461
+  3e278932262289c2fdf75b0b7ffc36a22704a600 127.0.0.1:7003@17003 myself,master - 0 1550043049000 3 connected
+  6c9da7d2a5e7f8a1a2ab527d8272e408b0dedddc 127.0.0.1:7004@17004 master - 0 1550043051569 4 connected
+  a9108b86fcbec8a85d00421e15f5c7c24c9e5bc4 127.0.0.1:7001@17001 master - 0 1550043052580 5 connected 5462-10922
+  ```
+
+  设置主从示例如下：
+
+  ```shell
+  WilldeMacBook-Air:data will$ redis-cli -p 7003 cluster replicate 6ee71a839737f4cf21ae06ad6d7e2fac633ad084
+  OK
+  WilldeMacBook-Air:data will$ redis-cli -p 7004 cluster replicate a9108b86fcbec8a85d00421e15f5c7c24c9e5bc4
+  OK
+  WilldeMacBook-Air:data will$ redis-cli -p 7005 cluster replicate 85bf9151af545735b0ef873c7db443d10a6c6163
+  OK
+  ```
+
+  此时的集群架构如下：
+
+  <img src="assets/image-20190213155135389-0044295.png" width="400px" /> 
+
+##### 官方工具安装
+
+###### 5.0以前版本
+
+redis-trib是官方提供的redis集群管理工具，可以用来构建集群，该工具需要安装ruby环境
+
++ 安装
+  + 安装ruby
+
+    mac本身自带ruby环境，如果存在版本问题，安装参见[mac笔记-ruby](../Notes/Mac笔记/Mac笔记.md#ruby) 
+
+    linux安装参见[linux笔记](../Notes/LinuxNotes/LinuxNote.md#ruby) 
+
+  + 安装ruby的redis客户端`rubygem redis`
+
+    ```shell
+    $ sudo gem install redis
+    ```
+
+  + 安装redis-trib.rb
+
+    将redis安装目录下的`./src/redis-trib.rb`文件拷贝到`/usr/local/bin`下，以随时使用该命令
+
+    ```shell
+    $ cp /Users/will/tools/redis-5.0.3/src/redis-trib.rb /usr/local/bin/
+    ```
+
++ 搭建集群
+
+  + 配置redis节点
+
+    同[原生安装](#原生安装)中本步骤
+
+  + 启动节点
+
+    启动节点与[服务端启动](#服务端启动)方法相同
+
+  + 使用如下命令搭建集群
+
+    ```shell
+    $ redis-trib.rb create --replicas 1 127.0.0.1:7000 127.0.0.1:7001 127.0.0.1:7002 127.0.0.1:7003 127.0.0.1:7004 127.0.0.1:7005
+    ```
+
+    该命令中的`1`是指定每个master节点有几个slave节点，随后是跟上n个master节点，然后按master节点的顺序跟上slave节点
+
+    随后会询问是否同意自动分配方案，输入`yes`即可
+
+###### 5.0及以后版本
+
+- 配置redis节点
+
+  同[原生安装](#原生安装)中本步骤
+
+- 启动节点
+
+  启动节点与[服务端启动](#服务端启动)方法相同
+
+- 使用如下命令搭建集群
+
+  ```shell
+  $ redis-cli --cluster create 127.0.0.1:7000 127.0.0.1:7001 127.0.0.1:7002 127.0.0.1:7003 127.0.0.1:7004 127.0.0.1:7005 --cluster-replicas 1
+  ```
+
+  该命令中节点顺序为，前面是n个master节点，然后按master节点的顺序跟上slave节点
+
+  `--cluster-replicas`是指定每个master节点有几个slave节点
+
+  随后会询问是否同意自动分配方案，输入`yes`即可
+
+##### 可视化部署工具安装
+
+生产环境中，一般不适用原生安装，可以使用官方工具安装，但是集群很多时，一般会使用一些可是化工具，如`CacheCloud`
+
+#### 命令
+
++ cluster info 
+
+  查看集群状态
+
+### 集群伸缩
+
+> 伸缩过程中具体细节参见[Redis Cluster 分区实现原理](https://www.cnblogs.com/wxd0108/p/5729754.html) 
+
+#### 伸缩原理
+
+redis cluster采用的是[虚拟槽分区](#虚拟槽分区)
+
++ 当集群中加入新的节点时，并不会立即引起数据的迁移，当为新的节点分配槽时，则会引起被分配的槽从旧节点迁移到新节点
++ 当集群中的节点被下线时，会先将该节点中的槽分配到其他节点，进行槽的迁移，然后将该节点下线
+
+#### 扩容
+
++ 配置新节点配置文件
+
+  除端口外，其他与旧节点保持一致即可，同[原生安装](#原生安装)中本配置节点的步骤
+
++ 启动新节点
+
+  ```shell
+  $ redis-server redis-7006.conf
+  $ redis-server redis-7007.conf
+  ```
+
++ 将新节点加入集群
+
+  + 手动添加
+
+    本步就是meet操作，登录任意旧节点，执行如下命令
+
+    ```shell
+    127.0.0.1:7000> cluster meet 127.0.0.1 7006
+    OK
+    127.0.0.1:7000> cluster meet 127.0.0.1 7007
+    OK
+    ```
+
+    将7007设置为7006的从节点
+
+    ```shell
+    $ redis-cli -p 7007 cluster replicate a9108b86fcbec8a85d00421e15f5c7c24c9e5bc4
+    OK
+    ```
+
+  + 官方工具添加
+
+    > 推荐使用本方法添加
+
+    ```shell
+    # 本命令每次只能添加1个节点
+    # 添加新节点为主节点
+    $ redis-cli --cluster add-node new_host:new_port existing_host:existing_port
+    # 添加新节点作为从节点
+    $ redis-cli --cluster add-node new_host:new_port existing_host:existing_port --cluster-slave --cluster-master-id <arg>
+    ```
+
+    参数说明：
+
+    + --cluster-slave：指定新节点作为从节点加入集群，不指定则作为主节点接入
+    + --cluster-master-id：当作为从节点加入集群时，用来指定作为哪个节点的从节点，如果不指定，则作为从节点最少的节点的从节点；指定的是master节点的node-id
+
+    例：
+
+    ```shell
+    WilldeMacBook-Air:config will$ redis-cli --cluster add-node 127.0.0.1:7006 127.0.0.1:7000
+    ...
+    WilldeMacBook-Air:config will$ redis-cli --cluster add-node 127.0.0.1:7007 127.0.0.1:7000 --cluster-slave
+    ...
+    ```
+
++ 槽迁移
+
+  + 槽迁移过程
+
+    > 以下过程是redis cluster内部的槽迁移过程
+
+    ![image-20190213224026008](assets/image-20190213224026008-0068826.png) 
+
+  + 槽迁移实现
+
+    命令如下：
+
+    ```shell
+    $ redis-cli --cluster reshard host:port		# 集群中任一节点的ip:port
+    	# 以下参数可省略，由提示来输入参数
+        --cluster-from <arg>					# 从哪个节点迁移
+        --cluster-to <arg>						# 迁移到哪个节点
+        --cluster-slots <arg>					# 迁移哪些槽
+        --cluster-yes							
+        --cluster-timeout <arg>
+        --cluster-pipeline <arg>
+        --cluster-replace
+    ```
+
+    如：
+
+    ```shell
+    WilldeMacBook-Air:config will$ redis-cli --cluster reshard 127.0.0.1:7000
+    >>> Performing Cluster Check (using node 127.0.0.1:7000)
+    M: 5ac22ef010485b45cf32e2a53767ceda21d77e13 127.0.0.1:7000
+       slots:[0-5460] (5461 slots) master
+       1 additional replica(s)
+    S: 97effd911ad46678e40ef2a94bc4e2a37e80d3bb 127.0.0.1:7007
+       slots: (0 slots) slave
+       replicates 337f8e52c310d97ce2e2ce8e26b8727dc322ec64
+    M: 13aa0cc7fb569ede301e775ad6b794ac76bfb71c 127.0.0.1:7001
+       slots:[5461-10922] (5462 slots) master
+       1 additional replica(s)
+    M: 307521c2b98af015be1d3e17f35deb28e3c4a3dc 127.0.0.1:7002
+       slots:[10923-16383] (5461 slots) master
+       1 additional replica(s)
+    S: 163a3380629d563ec8ef36c9b9393845b6409add 127.0.0.1:7003
+       slots: (0 slots) slave
+       replicates 13aa0cc7fb569ede301e775ad6b794ac76bfb71c
+    S: f4f1ed3394a0dcb9552335357da832d922b5df3e 127.0.0.1:7005
+       slots: (0 slots) slave
+       replicates 5ac22ef010485b45cf32e2a53767ceda21d77e13
+    M: 337f8e52c310d97ce2e2ce8e26b8727dc322ec64 127.0.0.1:7006
+       slots: (0 slots) master
+       1 additional replica(s)
+    S: 520f97f52538baf30202f41200403005911d757c 127.0.0.1:7004
+       slots: (0 slots) slave
+       replicates 307521c2b98af015be1d3e17f35deb28e3c4a3dc
+    [OK] All nodes agree about slots configuration.
+    >>> Check for open slots...
+    >>> Check slots coverage...
+    [OK] All 16384 slots covered.
+    # 输入要迁移多少个槽
+    How many slots do you want to move (from 1 to 16384)? 4096
+    # 输入迁移到哪个节点
+    What is the receiving node ID? 337f8e52c310d97ce2e2ce8e26b8727dc322ec64
+    Please enter all the source node IDs.
+      Type 'all' to use all the nodes as source nodes for the hash slots.
+      Type 'done' once you entered all the source nodes IDs.
+    # 输入从哪个节点迁移
+    Source node #1: all
+    
+    Ready to move 4096 slots.
+      Source nodes:
+        M: 5ac22ef010485b45cf32e2a53767ceda21d77e13 127.0.0.1:7000
+           slots:[0-5460] (5461 slots) master
+           1 additional replica(s)
+        M: 13aa0cc7fb569ede301e775ad6b794ac76bfb71c 127.0.0.1:7001
+           slots:[5461-10922] (5462 slots) master
+           1 additional replica(s)
+        M: 307521c2b98af015be1d3e17f35deb28e3c4a3dc 127.0.0.1:7002
+           slots:[10923-16383] (5461 slots) master
+           1 additional replica(s)
+      Destination node:
+        M: 337f8e52c310d97ce2e2ce8e26b8727dc322ec64 127.0.0.1:7006
+           slots: (0 slots) master
+           1 additional replica(s)
+    # 后面就是迁移日志 。。。
+    ```
+
+#### 收缩
+
++ 内部过程
+
+  <img src="assets/image-20190213230843952-0070524.png" width="300px" /> 
+
++ 忘记节点
+
+  ```shell
+  127.0.0.1:7000> cluster forget {downNodeId}
+  OK
+  ```
+
+  在某节点中执行该命令，则该节点在60s内忘记被下线节点，但是如果60s后集群中还有其他节点没有忘记被下线节点，则当前节点还会记得被下线节点
+
++ 下线顺序
+
+  对节点下线时，要先下线从节点，再下线主节点
+
++ 实现
+
+  手动下线过程，参见[驰狼课堂-redis教学视频-10-09节](http://www.chilangedu.com/sectionq/680324291/051514E510396EE7) 
+
+  但是一般集群管理会使用一些可视化工具
+
+#### moved异常
+
++ 重定向客户端
+
+  客户端请求服务端操作1个key时，会请求其中的1个节点，如果该节点负责该key，则直接操作；如果该节点不负责该key，则返回如下信息，然后客户端根据该信息去指定的节点操作key，所以最多需要2次通信
+
+  ```
+  GET msg
+  -MOVED 254 127.0.0.1:6381
+  ```
+
+  因为可能需要2次通信，所以会降低效率，一般都在客户端使用缓存来尽量直接找到负责该key的节点
+
++ 重定向客户端过程中返回的重定向信息就是moved异常
+
++ 集群模式使用`redis-cli`命令
+
+  使用`redis-cli`命令时，可以通过`-c`参数来指定使用集群模式连接服务端，这样服务端返回`moved异常`时客户端就能自行处理重定向动作了，否则需要手动进行重定向
+
+  <img src="assets/image-20190213233449022-0072089.png" width="400px" /> 
+
+#### ask重定向
+
+在槽迁移过程中，如果客户端访问源节点请求数据，因为源节点中数据已经迁移到目标节点，则源节点会返回ask重定向，然后客户端再向目标节点请求数据
+
+<img src="assets/image-20190214104402199-0112242.png" width="400px" /> 
+
+#### 批量操作
+
+在cluster中使用`mget`等批量操作时，由于各个key在不同节点上，所以将无法使用批量操作；
+
+由此产生4种方案：
+
++ 串行mget
+
+  就是将mget中的key分开，单独请求每个key
+
++ 串行IO
+
+  在客户端计算出这些key都在哪个槽，对处于相同节点的key统一执行1次mget，不同节点的单独请求
+
++ 并行IO
+
+  串行IO中的每次请求使用多线程并行执行请求
+
++ tag标签
+
+  就是[概念介绍](#概念介绍)中的`键哈希标签`方法
+
+这4种方法对比：
+
+<img src="assets/image-20190214175945709-0138386.png" width="500px" /> 
+
+
+
+### java客户端
+
+#### springboot2.0使用redis cluster
+
+> 参考资料：[springboot2.x 整合redis集群的几种方式](https://blog.csdn.net/qq_31256487/article/details/83144088) 
+
+与[springboot对redis的基本使用](#代码)中大体相同，只有`application.properties`配置文件修改为如下内容：
+
+```properties
+# redis
+spring.redis.cluster.nodes=127.0.0.1:7000,127.0.0.1:7001,127.0.0.1:7002,127.0.0.1:7003,127.0.0.1:7004,127.0.0.1:7005,127.0.0.1:7006,127.0.0.1:7007
+```
+
+#### springboot2.0整合redis和缓存功能
+
+> 参考资料：
+>
+> + [springboot2.0.x调用redis cluster](https://blog.csdn.net/li1987by/article/details/82117214)
+> + [SpringBoot 2.0 之使用声明式注解简化缓存](https://my.oschina.net/u/3773384/blog/1795296) 
+> + [spring boot2 (28)-cache缓存](https://blog.csdn.net/wangb_java/article/details/80212594) 
+
+##### 基本使用
+
++ 启用缓存功能
+
+  在任意配置类（如`RedisConfig`）上使用`@@EnableCaching`注解启用缓存功能
+
++ application.properties中配置缓存
+
+  ```properties
+  # cache
+  spring.cache.type=redis
+  ```
+
++ 注解使用缓存
+
+  + @Cacheable
+
+    + 功能：
+
+      ​		标注在方法上，指定的`cacheNames`或`value`与`key`拼接组成key，返回值作为value
+
+      ​	执行方法前判断缓存中是否存在指定key，如果缓存中没有该key则执行方法，并将返回值作为value存入到缓存，下次执行方法前判断存在该key则不执行方法直接将缓存中结果返回
+
+    + 属性
+
+      + cacheNames
+
+        使用该属性指定的字符串作为前缀与`key`拼接存入redis，用于对数据进行分类
+
+      + value
+
+        cacheNames的别名
+
+      + key
+
+        要操作的数据的key，内容为SPEL表达式
+
+      + condition
+
+        注解有效的前置条件，方法执行前判断，内容为SPEL表达式
+
+      + unless
+
+        注解有效的后置条件，方法执行后判断，内容为SPEL表达式
+
+  + @CachePut
+
+    + 功能：
+
+      ​		标注在方法上，指定的`cacheNames`或`value`与`key`拼接组成key，返回值作为value
+
+      ​	无论缓存中是否存在要操作ode数据，都执行方法并将结果作为新值缓存起来
+
+    + 属性
+
+      与`@Cacheable`注解相同
+
+  + @CacheEvict
+
+    + 功能：
+
+      ​		标注在方法上，指定的`cacheNames`或`value`与`key`拼接组成key
+
+      ​	执行方法，并将缓存中匹配到的数据删除
+
+    + 属性
+
+      与`@Cacheable`注解相同，  没有`unless`属性
+
+  + @CacheConfig
+
+    + 功能：
+
+      标注在类上，该类中使用的所有cache相关注解，如果没有指定`cacheNames`属性，则均指定为本注解的`cacheNames`属性值，如果指定了则以指定的为准
+
+    + 属性
+
+      + cacheNames
+
+        作用于`@Cacheable`的`cacheNames`属性相同，只不过作用域为该注解标注的类中使用的所有cache相关注解
+
+##### 乱码问题
+
+上述配置已经完成缓存功能的使用，但是使用时会出现乱码问题，需要声名1个`CacheManager`类型的Bean
+
+```java
+/**
+     * 配置 CacheManager，用来解决缓存功能中乱码问题
+     * @return CacheManager
+     */
+@Bean
+public CacheManager cacheManager(RedisConnectionFactory factory) {
+    // 配置序列化
+    RedisCacheConfiguration config = RedisCacheConfiguration.defaultCacheConfig();
+    RedisCacheConfiguration redisCacheConfiguration = config.serializeKeysWith(RedisSerializationContext.SerializationPair.fromSerializer(new StringRedisSerializer()))
+        .serializeValuesWith(RedisSerializationContext.SerializationPair.fromSerializer(new Jackson2JsonRedisSerializer<>(Object.class)));
+    return RedisCacheManager.builder(factory)
+        .cacheDefaults(redisCacheConfiguration)
+        .build();
+}
+```
+
+因为这里使用了自己声名的`CacheManager`，不是springboot自动配置的，所以会导致`application.properties`中关于cache的配置无法生效，所以需要将那些配置变为代码在这个方法中进行设置，或获取配置文件中的配置设置到`CacheManager`中
+
+##### 缓存功能使用位置
+
+==cache相关注解最好在service层使用==
+
+##### 缓存使用过期时间
+
+> + 在springboot中使用cache功能是无法在`@Cacheable`等注解中指定数据的过期时间的，但是可以在配置`RedisCacheManager`时，为`cacheNames`相同的一批数据指定过期时间
+> + 资料参见：
+>   + [springboot2.0以上中使用Cache加redis实现数据缓存](https://blog.csdn.net/shuaishuaidewo/article/details/81136368) 
+
+```java
+@Bean
+public CacheManager cacheManager(RedisConnectionFactory factory) {
+    // 解决缓存功能中乱码问题
+    RedisCacheConfiguration redisCacheConfiguration = RedisCacheConfiguration.defaultCacheConfig().serializeKeysWith(RedisSerializationContext.SerializationPair.fromSerializer(new StringRedisSerializer()))
+        .serializeValuesWith(RedisSerializationContext.SerializationPair.fromSerializer(new Jackson2JsonRedisSerializer<>(Object.class))).disableCachingNullValues();
+
+    // cacheNames
+    Set<String> cacheNames = new HashSet<>();
+    cacheNames.add("test");
+    // 为已指定的cacheNames配置过期时间
+    Map<String,RedisCacheConfiguration> map = new HashMap<>();
+    map.put("test",redisCacheConfiguration.entryTtl(Duration.ofSeconds(60L)));
+    // 创建 CacheManager
+    return RedisCacheManager.builder(factory)
+        .cacheDefaults(redisCacheConfiguration)
+        .initialCacheNames(cacheNames)
+        .withInitialCacheConfigurations(map)
+        // .transactionAware()                         // 开启事务支持
+        .build();
+}
+```
+
+注意：
+
++ `cacheDefaults`、map中的`RedisCacheConfiguration`需要在同1个对象上进行设置，否则过期时间设置无效
++ 注意`cacheDefaults`方法要放在`initialCacheNames`方法前面，否则`cacheDefaults`配置无效，参见[springCache配置中踩的坑](https://blog.csdn.net/qq_33222871/article/details/83893820)  
+
+### 常见问题
+
+#### 数据迁移
+
+将集群外其他节点数据迁移到集群中
+
++ 官方工具
+
+  ```shell
+  redis-cli --cluster import host:port 	# 目标集群中的节点
+  	--cluster-from host:port 			# 源节点
+  	--cluster-copy						# 复制
+  	--cluster-replace					# 替换
+  ```
+
+  + 只能单机迁移到集群
+  + 不支持在线迁移，源节点需要停写，否则会丢失数据
+  + 不支持断点续传
+  + 单线程迁移，速度较慢
+
++ 第三方工具
+
+  + redis-migrate-tool
+  + redis-port
+
+#### 集群对比单机
+
+<img src="assets/image-20190216123840060-0291920.png" width="500px" /> 
+
+如果对容量没有过多要求，尽量使用sentinel
+
+## 缓存设计与优化
+
+### 缓存穿透问题
+
++ 缓存功能在代码中一般逻辑
+
+  请求资源时先去redis中查数据，如果查不到则到数据库中查，然后将结果缓存到缓存中，然后返回请求，下次请求则直接能在缓存中得到数据
+
++ 问题
+
+  对于数据库中确实不存在的数据，请求会不断的打到数据层，并返回null，这就是缓存穿透问题
+
++ 造成原因
+
+  + 代码逻辑问题
+  + 恶意攻击，请求客户端不存在的资源
+
++ 解决方案
+
+  + 缓存null值
+
+    缺点：
+
+    + 需要存储更多的key
+
+    + 缓存层与数据层数据造成短期不一致
+
+      第一次请求时，由于网络问题导致返回null，缓存起来了，下次请求时数据库网络恢复了，但是请求还是会拿到缓存中的null，一定时间内无法拿到数据库中真实的值
+
+  + 布隆过滤器
+
+    较复杂，暂时未了解
+
+## CacheCloud
+
+> mysql升级到5.7以后，程序中有很多bug，用起来较麻烦，最终决定不用了
+
+### 介绍
+
++ cachecloud是提供redis云服务的云平台，类似于阿里云提供redis服务的管理平台
++ cachecloud使用springboot开发，使用到了mysql数据库
+
+### 搭建cachecloud应用
+
+> 在服务端选择1台机器搭建cachecloud
+
++ 下载地址及安装说明参见[CacheCloud的Github](https://github.com/sohutv/cachecloud/wiki/3.服务器端接入文档) 
+
++ 从[cachecloud-1.2-bin](https://pan.baidu.com/s/1nvTv90l)下载二进制版本，并解压到合适的工作目录，解压后内容如下：
+
+  + cachecloud-open-web-1.0-SNAPSHOT.war: cachecloud war包
+  + cachecloud.sql: 数据库schema，默认数据名为cache_cloud，可以自行修改
+  + jdbc.properties：jdbc数据库配置，自行配置
+  + start.sh：启动脚本，部分可配置项可以在这里进行修改
+  + stop.sh： 停止脚本
+  + logs：存放日志的目录
+
++ 修改`cachecloud.sql`并导入到数据库
+
+  mysql5.7及以上版本，需要将该文件中所有`0000-00-00 00:00:00`替换为`1970-01-01 00:00:01`
+
+  然后导入sql脚本
+
++ 修改`jdbc.properties`中的配置
+
++ 修改`start.sh`中的如下内容：
+
+  + DEPLOY_DIR；配置工作路径
+
++ 执行如下命令启动cachecloud
+
+  ```shell
+  sudo sh start.sh
+  ```
+
++ 访问http://127.0.0.1:8585/manage/login，默认用户名密码均为admin
+
++ 进入`管理后台 → Redis配置模板管理`，增加如下配置
+
+  <img src="assets/image-20190217044105226-0349665.png" width="300px" />  
+
+  这步必须做，否则其他机器上的客户端无法连接到该redis节点
+
+### 部署redis机器
+
+> 将需要作为redis节点的机器，均按如下方法进行部署
+
++ 下载[cachecloud](https://github.com/sohutv/cachecloud)项目，并将`script/cachecloud-init.sh`拷贝到redis节点服务器
+
++ 将`readonly redisTarGz="redis-3.0.7.tar.gz"`中的redis版本修改为最新版本，如
+
+  ```shell
+  readonly redisTarGz="redis-5.0.3.tar.gz"
+  ```
+
++ 执行如下命令运行该脚本
+
+  ```shell
+  sudo sh cachecloud-init.sh username
+  ```
+
+  其中`username`为ssh用户名，该脚本会使用该用户名在当前机器上创建1个ssh用户
+
+  然后输入两次密码，该密码为刚才指定的ssh用户名的密码
+
+  等待安装结束，该机器就部署完毕了
+
+  该脚本进行了如下操作：
+
+  + 用指定的用户名密码在这台redis节点服务器上创建1个ssh用户，用于cachecloud应用于该节点服务器进行通信（**注意：每台redis节点服务器的用户名密码要一致**）
+  + 创建cachecloud工作目录（/opt/cachecloud和/tmp/cachecloud）
+  + 安装redis
+
++ 关闭防护墙
+
+  如果不关闭防火墙，后面开启redis服务时，客户端连接将被拒绝
+
++ 登录cachecloud应用，进入`管理后台 → 系统配置管理`，将刚才指定的ssh用户名密码配置在这里并保存
+
+  <img src="assets/image-20190217021742055-0341062.png" width="500px" /> 
+
++ 进入`机器管理`，`添加新机器`，将刚才部署的那些redis节点服务器逐一进行添加，则cachecloud应用就可以对那些机器进行监控、搭建等工作了
+
+### 功能介绍
+
+cachecloud就是搜狐开发的用来对外提供redis云服务的开源管理平台，这个平台上分为两种用户：普通用户、管理员；普通用户就是需要购买云服务的用户，管理员就是后台负责维护的运维人员
+
+登录到云平台的首页
+
+![image-20190217051239425](assets/image-20190217051239425-0351559.png) 
+
+该页面中内容，除红框内的内容，普通用户均可见，管理员所有内容均可见
+
++ 管理后台
+
+  功能很多，下面介绍
+
++ 导入应用
+
+  用于导入已存在，但是没有被cachecloud管理的redis服务
+
++ 迁移数据工具
+
++ 应用列表
+
+  就是当前页面，列表中每个应用点进去即可看见这个应用的所有监控信息
+
++ 应用申请
+
+  用于申请redis服务
+
+### 构建redis服务
+
++ 点击`应用申请`，填写相关信息并提交
+
++ 进入`管理后台`，进行`流程审批`，点击`审批处理`，按照规则在输入框内对机器进行分配
+
++ 分配成功后按照提示点击通过
+
+  这里如果没有出现`通过`按钮，是后台报错了，查看日志，看看是否是防火墙没关、保护模式造成的
+
+
+### 采坑记录
+
+#### 无法打开机器管理
+
++ 问题描述
+
+  登录`cachecloud`页面后，访问`管理后台 → 机器管理`返回404
+
++ 问题分析
+
+  mysql5.6及以下版本`timestamp`类型数据最小值为`0000-00-00 00:00:00`，mysql5.7及以上版本最小值只能为`1970-01-01 00:00:01`
+
+  `cachecloud.sql`中创建`machine_info`表时`service_time`字段默认值设为了`0000-00-00 00:00:00`，导致后面如下sql执行失败
+
+  ```sql
+  ALTER TABLE `machine_info` ADD COLUMN `collect` int DEFAULT 1 COMMENT 'switch of collect server status, 1:open, 0:close';
+  ```
+
+  所以`machine_info`表中没有`collect`字段，当访问`机器管理`页面时后端发生错误，无法打开该页面
+
++ 解决方案
+
+  将`cachecloud.sql`中所有`0000-00-00 00:00:00`替换为`1970-01-01 00:00:01`
 
 
 
@@ -3141,6 +4066,6 @@ sentinel内部存在3个定时器
 
 
 
+```
 
-
-
+```
