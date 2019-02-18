@@ -1628,7 +1628,10 @@ jedis是基于java开发的redis客户端，用户通过java使用redis
   > 配置redis的`key`和`value`的序列化方式
   >
   > + 默认使用的是`JdkSerializationRedisSerializer`，但是该序列化方式使用其他客户端查看时会出现乱码
-  > + 配置`key`的序列化方式为`StringRedisSerializer`，配置`value`的序列化方式为`Jackson2JsonRedisSerializer`
+  > + 网上有人说设置`key`的序列化方式为`StringRedisSerializer`，`value`的序列化方式为`Jackson2JsonRedisSerializer`，这样确实可以解决乱码问题，但是因为`key`的序列化方式为`StringRedisSerializer`，该类只能接受`String`类型的`key`，**后面mybatis使用redis做二级缓存时会将对象作为key传入，造成类型转换异常**，所以`key`的序列化方式应该设置为可以接受对象的方式（参见[Spring整合Redis报ClassCastException](https://blog.csdn.net/yz357823669/article/details/83245739)）
+  >
+  > + 根据[RedisTemplate系列化器之GenericJackson2JsonRedisSerializer](https://blog.csdn.net/u010180738/article/details/79383246)中的描述，`Jackson2JsonRedisSerializer`序列化`List`时也会出现类型转换异常，该文中推荐使用`GenericJackson2JsonRedisSerializer`。
+  > + 综上，我们将`RedisTemplate`的4个序列化方式均设置为`GenericJackson2JsonRedisSerializer`,代码如下，`RedisSerializer.json()`返回的就是`GenericJackson2JsonRedisSerializer`
 
   ```java
   @Configuration
@@ -1644,19 +1647,10 @@ jedis是基于java开发的redis客户端，用户通过java使用redis
           RedisTemplate<String, Object> template = new RedisTemplate<>();
           template.setConnectionFactory(redisConnectionFactory);
   
-          //使用Jackson2JsonRedisSerializer来序列化和反序列化redis的value值
-          Jackson2JsonRedisSerializer serializer = new Jackson2JsonRedisSerializer<>(Object.class);
-  
-          ObjectMapper mapper = new ObjectMapper();
-          mapper.setVisibility(PropertyAccessor.ALL, JsonAutoDetect.Visibility.ANY);
-          mapper.enableDefaultTyping(ObjectMapper.DefaultTyping.NON_FINAL);
-          serializer.setObjectMapper(mapper);
-  
-          template.setValueSerializer(serializer);
-          //使用StringRedisSerializer来序列化和反序列化redis的key值
-          template.setKeySerializer(new StringRedisSerializer());
-          template.setHashKeySerializer(new StringRedisSerializer());
-          template.setHashValueSerializer(serializer);
+          template.setKeySerializer(RedisSerializer.json());
+          template.setHashKeySerializer(RedisSerializer.json());
+          template.setValueSerializer(RedisSerializer.json());
+          template.setHashValueSerializer(RedisSerializer.json());
           template.afterPropertiesSet();
           return template;
       }
