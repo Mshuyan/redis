@@ -3897,6 +3897,95 @@ public CacheManager cacheManager(RedisConnectionFactory factory) {
 
     较复杂，暂时未了解
 
+## 源码
+
+### redis内存存储结构
+
+> 参考资料[Redis 内存存储结构分析](https://www.oschina.net/question/12_23428) 
+
+![image-20190222230614796](assets/image-20190222230614796-0847974.png) 
+
+上图中每个表都对应着redis源码中的1个结构体
+
++ redisDb
+
+  + db结构体，每个该类型的对象对应redis中的1个db，一共16个
+
+  + 该结构体中有1个`dict`指针，指向1个字典对象
+  + 源码位置：service.h
+
++ dict
+
+  + 字典对象中有2个哈希表字典对象(`dictht`)，`ht[0]`用于存储数据，`ht[1]`用于扩容时进行渐进rehash
+  + 源码位置：dict.h
+
++ dictht
+
+  + `dictht`对象中有1个二级指针`**table`，他下面是1个哈希表，该二级指针的地址为哈比表中哈希桶的起始地址，该哈希桶是1个指针数组，每个指针指向1个哈希桶下面的链表
+  + 链表中每个节点的类型为`dictEntity`
+  + 源码位置：dict.h
+
++ dictEntity
+
+  + 每个`dictEntity`对象是链表的1个节点，该节点中保存了1个键值对的指针和下一个节点的指针
+    + key：键值对的key的指针
+    + value：键值对的value的指针
+    + next：下一个节点的指针
+  + key、value指针指向的都是`redisObject`对象，两个`redisObject`对象中分别存储了key、value的数据
+  + 源码位置：dict.h
+
++ redisObject
+
+  参见[redis对象系统](#redis对象系统) 
+
+### 渐进rehash
+
++ redis在进行扩容时，实际上是哈希表扩容，哈希桶需要增加，此时哈希表上的所有节点都需要更换位置，这种从旧哈希表转换为新哈希表的过程就是rehash
+
++ 一次性rehash
+
+  + 思路：建立1个新的哈希桶，将旧哈希表中的数据逐个添加到新哈希表，然后将旧哈希表销毁掉，将`dictht`对象中的`**table`指针指向新哈希表
+
+  + 一次性哈希缺点：必须一次性完成，耗时很长，redis是单线程的，这段时间内redis将停止服务
+
++ 渐进rehash
+
+  + 思路：将一次性rehash过程分解开，rehash一会之后停下来去响应服务，然后回来接着进行rehash，来实现一边rehash，一边提供服务
+  + 实现：在`dict`对象中存2个哈希表对象，`ht[0]`用于存数据，`ht[1]`用于rehash过成中保存新的哈希表，阶段性将旧哈希表中的数据逐个添加到新哈希表，然后将旧哈希表销毁掉，将`ht[0]`中的`**table`指针指`ht[1]`中的`**table`，使用新哈希表存储数据
+
+  + `ht[1]`作用：用于渐进rehash过程中保存新哈希表，没有该对象，一旦rehash过程中断，回来就找不到新的哈希表了
+
+### redis对象系统
+
+> 参见[Redis源码剖析和注释（八）--- 对象系统(redisObject)](https://blog.csdn.net/men_wen/article/details/70257207) 
+
+redis采用`对象系统(redisObject)`存储键或值，`redisObject`的结构可以在`service.h`中查看，内容如下：
+
+```c
+typedef struct redisObject {
+    unsigned type:4;        
+    unsigned encoding:4;
+    unsigned lru:LRU_BITS; /* lru time (relative to server.lruclock) */
+    int refcount;
+    //指向底层数据实现的指针
+    void *ptr;
+} robj;
+```
+
++ type：用于表示存储的数据是redis5种基本数据类型中的哪种，4bits
+
++ encoding：编码类型，共10种，4bits
+
++ lru：最后访问时间，用于根据LRU算法删除对象
+
++ refcount：引用计数
+
++ ptr
+
+  + 真正数据存储地址的指针
+
+  + 真正的key、value数据按照指定编码类型编码后存储在内存，该指针指向实际数据存储位置
+
 ## CacheCloud
 
 > mysql升级到5.7以后，程序中有很多bug，用起来较麻烦，最终决定不用了
