@@ -3695,7 +3695,7 @@ spring.redis.cluster.nodes=127.0.0.1:7000,127.0.0.1:7001,127.0.0.1:7002,127.0.0.
 
 + 启用缓存功能
 
-  在任意配置类（如`RedisConfig`）上使用`@@EnableCaching`注解启用缓存功能
+  在任意配置类（如`RedisConfig`）上使用`@EnableCaching`注解启用缓存功能
 
 + application.properties中配置缓存
 
