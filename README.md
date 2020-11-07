@@ -2310,7 +2310,9 @@ public List<Object> executePipelined(RedisCallback<?> action, @Nullable RedisSer
 
 + maxmemory
 
-  可以使用的最大内存，达到该值时使用内存管理策略，单位是字节，默认不设置最大值
+  可以使用的最大内存，达到该值时使用内存管理策略，单位是字节
+
+  `maxmemory`默认为0，不限制最大内存，此时会导致内存不够时直接崩溃，所以一定要设置`maxmemory`
 
 + maxmemory-policy
 
@@ -2319,6 +2321,8 @@ public List<Object> executePipelined(RedisCallback<?> action, @Nullable RedisSer
   + volatile-lru：
 
     尝试回收最少使用的键，但仅限于在已设置过期集合的键。 
+
+    **建议使用这种策略**
 
   + allkeys-lru
 
@@ -2347,8 +2351,8 @@ public List<Object> executePipelined(RedisCallback<?> action, @Nullable RedisSer
   + neoviction
 
     禁止驱逐数据（默认）；当内存达到限制时并且客户端尝试执行一些消耗内存的命令时返回错误，即OOM异常。
-
-  > lfu与lru算法类似，不过lfu更新，这里不必纠结两者区别
+  
+  > lfu与lru算法类似，lru时根据访问时间排序，将很久没有访问的数据扔掉；lfu根据访问频率排序，将访问频率最低的数据扔掉
 
 ## 持久化
 
@@ -2852,7 +2856,13 @@ aof-load-truncated yes					# 加载aof文件时如果发现aof文件不完整是
 
   修改配置参数`repl_backlog_size`
 
-## 高可用（sentinel）
+## 哨兵模式（sentinel）
+
+### 作用
+
++ 监控：监控节点运行状态
++ 提醒：节点发生故障时向运维人员发出提醒
++ 自动故障转移：选举新的主节点
 
 ### 故障转移
 
