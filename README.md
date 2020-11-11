@@ -317,21 +317,22 @@ slowlog-max-len 1000
 
 - set
 
-  语法：set KEY VALUE
+  语法：set KEY VALUE [EX seconds] [PX milliseconds] [NX|XX]
 
-  功能：不管key是否存在，都进行设置
+  功能：没有可选参数时，不管key是否存在，都进行设置
+
+  参数：
+
+  + EX：设置过期时间，单位秒
+  + PX：设置过期时间，单位毫秒
+  + NX：不存在时才设置
+  + XX：存在时才设置
 
 - setnx
 
   语法：setnx KEY VALUE
 
   功能：key不存在时，才进行设置
-
-- set xx
-
-  语法：set KEY VALUE xx
-
-  功能：key存在时，才进行设置
 
 - setex
 
